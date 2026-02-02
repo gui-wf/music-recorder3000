@@ -81,3 +81,7 @@ nix develop
 Audio that cuts off abruptly (going from full volume to silence in one sample) creates a harsh click or pop. This is jarring and can be uncomfortable, especially on headphones.
 
 This tool fades volume smoothly over 0.5 seconds when starting and stopping - your ears will thank you.
+
+## See also
+
+- [mpv-gradual-pause](https://github.com/gui-wf/mpv-gradual-pause) - Same concept for mpv: smooth audio fade effects when pausing/unpausing video
