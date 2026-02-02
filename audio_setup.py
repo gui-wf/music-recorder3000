@@ -224,6 +224,17 @@ class AudioSetup:
 
             time.sleep(step_delay)
 
+    def _fade_sink_only(self, sink_name: str, start: int, end: int, duration: float = FADE_DURATION):
+        """Fade only a specific sink's volume (not sources)."""
+        steps = max(1, int(duration / 0.025))  # ~25ms per step
+        step_delay = duration / steps
+
+        for step in range(steps + 1):
+            progress = step / steps
+            volume = int(start + (end - start) * progress)
+            self.set_sink_volume(sink_name, volume)
+            time.sleep(step_delay)
+
     def enable_monitoring(self):
         """Enable monitoring (connect to output) with fade-in."""
         if self._monitoring_enabled:
@@ -233,20 +244,26 @@ class AudioSetup:
             print("No default sink configured")
             return
 
+        # Set output to 0 before connecting
+        self.set_sink_volume(self._default_sink, 0)
+
         # Connect sources to output
         for source in self._managed_sources:
             self._connect_source_to_output(source, self._default_sink)
 
+        # Fade in the output only
+        self._fade_sink_only(self._default_sink, 0, 100, FADE_DURATION / 2)
+
         self._monitoring_enabled = True
-        print("Monitoring enabled")
 
     def disable_monitoring(self):
         """Disable monitoring (disconnect from output) with fade-out."""
         if not self._monitoring_enabled:
             return
 
-        # Fade out before disconnecting
-        self.fade_out(FADE_DURATION / 2)  # Shorter fade for toggle
+        # Fade out the output only (don't touch sources - recording continues)
+        if self._default_sink:
+            self._fade_sink_only(self._default_sink, 100, 0, FADE_DURATION / 2)
 
         # Remove monitor links
         for out_port, in_port in self._monitor_links:
@@ -257,9 +274,9 @@ class AudioSetup:
         self._monitor_links.clear()
         self._monitoring_enabled = False
 
-        # Restore volume for recording
-        self.fade_in(FADE_DURATION / 2)
-        print("Monitoring disabled")
+        # Restore output volume for other apps
+        if self._default_sink:
+            self.set_sink_volume(self._default_sink, 100)
 
     def toggle_monitoring(self) -> bool:
         """Toggle monitoring on/off. Returns new state."""
