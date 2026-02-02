@@ -33,8 +33,11 @@ class AudioSetup:
         self.scrcpy_process: subprocess.Popen | None = None
         self._cleanup_registered = False
         self._created_links: list[tuple[str, str]] = []  # Track links we created
+        self._monitor_links: list[tuple[str, str]] = []  # Links for monitoring (to output)
         self._managed_sources: list[str] = []  # Sources we're managing volume for
         self._virtual_sink_name: str | None = None
+        self._default_sink: str | None = None
+        self._monitoring_enabled: bool = False
 
     def _run(self, cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
         """Run a command and return result."""
@@ -152,10 +155,12 @@ class AudioSetup:
 
         return {"outputs": outputs, "inputs": inputs}
 
-    def link_ports(self, output_port: str, input_port: str) -> bool:
+    def link_ports(self, output_port: str, input_port: str, is_monitor_link: bool = False) -> bool:
         """Link an output port to an input port."""
         if self._run_pw_link(output_port, input_port):
             self._created_links.append((output_port, input_port))
+            if is_monitor_link:
+                self._monitor_links.append((output_port, input_port))
             return True
         return False
 
@@ -218,6 +223,86 @@ class AudioSetup:
                 self.set_sink_volume(self._virtual_sink_name, volume)
 
             time.sleep(step_delay)
+
+    def enable_monitoring(self):
+        """Enable monitoring (connect to output) with fade-in."""
+        if self._monitoring_enabled:
+            return
+
+        if not self._default_sink:
+            print("No default sink configured")
+            return
+
+        # Connect sources to output
+        for source in self._managed_sources:
+            self._connect_source_to_output(source, self._default_sink)
+
+        self._monitoring_enabled = True
+        print("Monitoring enabled")
+
+    def disable_monitoring(self):
+        """Disable monitoring (disconnect from output) with fade-out."""
+        if not self._monitoring_enabled:
+            return
+
+        # Fade out before disconnecting
+        self.fade_out(FADE_DURATION / 2)  # Shorter fade for toggle
+
+        # Remove monitor links
+        for out_port, in_port in self._monitor_links:
+            self.unlink_ports(out_port, in_port)
+            if (out_port, in_port) in self._created_links:
+                self._created_links.remove((out_port, in_port))
+
+        self._monitor_links.clear()
+        self._monitoring_enabled = False
+
+        # Restore volume for recording
+        self.fade_in(FADE_DURATION / 2)
+        print("Monitoring disabled")
+
+    def toggle_monitoring(self) -> bool:
+        """Toggle monitoring on/off. Returns new state."""
+        if self._monitoring_enabled:
+            self.disable_monitoring()
+        else:
+            self.enable_monitoring()
+        return self._monitoring_enabled
+
+    def _connect_source_to_output(self, source_pattern: str, sink_pattern: str) -> bool:
+        """Connect a source to output sink, tracking as monitor link."""
+        result = self._run(["pw-link", "-o"], check=False)
+        source_ports = [l.strip() for l in result.stdout.splitlines()
+                        if source_pattern.lower() in l.lower()]
+
+        result = self._run(["pw-link", "-i"], check=False)
+        sink_ports = [l.strip() for l in result.stdout.splitlines()
+                      if sink_pattern.lower() in l.lower()]
+
+        if not source_ports or not sink_ports:
+            return False
+
+        success = False
+        for src_port in source_ports:
+            for dst_port in sink_ports:
+                src_ch = src_port.split(":")[-1].upper() if ":" in src_port else ""
+                dst_ch = dst_port.split(":")[-1].upper() if ":" in dst_port else ""
+
+                should_connect = (
+                    "MONO" in src_ch or
+                    "MONO" in dst_ch or
+                    (src_ch == dst_ch) or
+                    ("FL" in src_ch and "FL" in dst_ch) or
+                    ("FR" in src_ch and "FR" in dst_ch) or
+                    ("FL" in dst_ch and "MONO" in src_ch) or
+                    ("FR" in dst_ch and "MONO" in src_ch)
+                )
+
+                if should_connect:
+                    if self.link_ports(src_port, dst_port, is_monitor_link=True):
+                        success = True
+
+        return success
 
     def connect_to_virtual_sink(self, source_node: str, virtual_sink: str = "record_mix") -> bool:
         """Connect a source node's output to the virtual sink."""
@@ -429,7 +514,8 @@ class AudioSetup:
         self.set_sink_volume(virtual_sink, 0)
 
         # Get default output sink for monitoring
-        default_sink = self.get_default_sink() if connect_to_output else None
+        default_sink = self.get_default_sink()
+        self._default_sink = default_sink  # Store for toggle_monitoring
 
         # Find and connect USB audio (synth)
         usb_source = self.find_usb_audio_source()
@@ -449,7 +535,8 @@ class AudioSetup:
 
             # Also connect directly to output so you can hear the synth
             if connect_to_output and default_sink:
-                self.connect_source_to_sink(synth_name, default_sink)
+                self._connect_source_to_output(synth_name, default_sink)
+                self._monitoring_enabled = True
         else:
             print("USB audio interface not found")
             sources["synth"] = None

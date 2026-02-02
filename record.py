@@ -6,15 +6,40 @@ Record audio from multiple sources simultaneously:
 """
 
 import argparse
+import select
 import signal
 import subprocess
 import sys
+import termios
 import threading
 import time
+import tty
 from datetime import datetime
 from pathlib import Path
 
 from audio_setup import AudioSetup, record_with_pw_record
+
+
+class KeyboardMonitor:
+    """Non-blocking keyboard input detection."""
+
+    def __init__(self):
+        self._old_settings = None
+
+    def __enter__(self):
+        self._old_settings = termios.tcgetattr(sys.stdin)
+        tty.setcbreak(sys.stdin.fileno())
+        return self
+
+    def __exit__(self, *args):
+        if self._old_settings:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old_settings)
+
+    def get_key(self) -> str | None:
+        """Return pressed key or None if no key pressed."""
+        if select.select([sys.stdin], [], [], 0)[0]:
+            return sys.stdin.read(1)
+        return None
 
 # Global flag for stopping recording
 stop_recording = threading.Event()
@@ -24,6 +49,7 @@ def record_with_pw(
     targets: dict[str, str],
     duration: float,
     output_dir: Path,
+    setup: AudioSetup | None = None,
 ) -> dict[str, Path]:
     """Record from targets using pw-record."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -52,18 +78,29 @@ def record_with_pw(
         print("No targets to record!")
         return {}
 
-    # Wait for duration or Ctrl+C
+    # Wait for duration or Ctrl+C, check for key presses
     start_time = time.time()
     try:
-        while time.time() - start_time < duration and not stop_recording.is_set():
-            time.sleep(0.1)
-            # Check if any process died
-            for name, proc in list(processes.items()):
-                if proc.poll() is not None:
-                    print(f"  Warning: {name} recording stopped unexpectedly")
-                    del processes[name]
-            if not processes:
-                break
+        with KeyboardMonitor() as kb:
+            while time.time() - start_time < duration and not stop_recording.is_set():
+                time.sleep(0.1)
+
+                # Check for key presses
+                key = kb.get_key()
+                if key == 'm' and setup:
+                    is_monitoring = setup.toggle_monitoring()
+                    status = "ON" if is_monitoring else "OFF"
+                    print(f"  [Monitor: {status}]")
+                elif key == 'q':
+                    stop_recording.set()
+
+                # Check if any process died
+                for name, proc in list(processes.items()):
+                    if proc.poll() is not None:
+                        print(f"  Warning: {name} recording stopped unexpectedly")
+                        del processes[name]
+                if not processes:
+                    break
     except KeyboardInterrupt:
         pass
 
@@ -159,10 +196,10 @@ Examples:
             print(f"  {name}: {target}")
 
     print(f"\nRecording for {args.duration} seconds...")
-    print("Press Ctrl+C to stop early and save.\n")
+    print("Press 'm' to toggle monitoring, 'q' or Ctrl+C to stop.\n")
 
     try:
-        output_files = record_with_pw(targets, args.duration, args.output)
+        output_files = record_with_pw(targets, args.duration, args.output, setup)
 
         print("\nSaved files:")
         for name, path in output_files.items():
