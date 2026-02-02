@@ -45,6 +45,18 @@ class KeyboardMonitor:
 stop_recording = threading.Event()
 
 
+def countdown(seconds: int):
+    """Display a countdown before recording."""
+    if seconds <= 0:
+        return
+
+    print(f"Recording starts in...")
+    for i in range(seconds, 0, -1):
+        print(f"  {i}...", flush=True)
+        time.sleep(1)
+    print("  GO!\n")
+
+
 def record_with_pw(
     targets: dict[str, str],
     duration: float,
@@ -134,6 +146,7 @@ Examples:
     )
     parser.add_argument("--list", action="store_true", help="List available audio devices")
     parser.add_argument("--duration", "-d", type=float, default=30, help="Recording duration in seconds")
+    parser.add_argument("--countdown", "-c", type=int, default=5, help="Countdown before recording (0 to disable)")
     parser.add_argument("--output", "-o", type=Path, default=Path("recordings"), help="Output directory")
     parser.add_argument("--synth-only", action="store_true", help="Record only synth (no Android mic)")
     parser.add_argument("--mic-only", action="store_true", help="Record only Android mic (no synth)")
@@ -189,6 +202,9 @@ Examples:
 
     print(f"\nRecording for {args.duration} seconds...")
     print("Press 'm' to toggle monitoring, 'q' or Ctrl+C to stop.\n")
+
+    # Countdown before recording
+    countdown(args.countdown)
 
     try:
         output_files = record_with_pw(targets, args.duration, args.output, setup)
