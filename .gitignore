@@ -1,0 +1,12 @@
+.direnv
+result
+.venv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Recordings
+recordings/
+*.wav
