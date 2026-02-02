@@ -485,15 +485,16 @@ class AudioSetup:
     def setup_recording(
         self,
         with_scrcpy: bool = True,
+        with_synth: bool = True,
         connect_to_output: bool = True,
     ) -> dict[str, str | None]:
         """
         Set up the full recording chain:
         1. Create virtual sink for mixing
         2. Optionally start scrcpy
-        3. Connect USB audio capture to virtual sink
-        4. Connect scrcpy to virtual sink
-        5. Optionally connect virtual sink to output for monitoring
+        3. Optionally connect USB audio capture to virtual sink
+        4. Optionally connect scrcpy to virtual sink
+        5. Optionally connect to output for monitoring
 
         Returns dict with source names for recording.
         """
@@ -518,27 +519,30 @@ class AudioSetup:
         self._default_sink = default_sink  # Store for toggle_monitoring
 
         # Find and connect USB audio (synth)
-        usb_source = self.find_usb_audio_source()
-        if usb_source:
-            sources["synth"] = usb_source["name"]
-            synth_name = usb_source["name"]  # e.g., alsa_input.usb-...-00.mono-fallback
-            synth_desc = usb_source.get('description', synth_name)
-            print(f"Found USB audio: {synth_desc} ({synth_name})")
+        if with_synth:
+            usb_source = self.find_usb_audio_source()
+            if usb_source:
+                sources["synth"] = usb_source["name"]
+                synth_name = usb_source["name"]  # e.g., alsa_input.usb-...-00.mono-fallback
+                synth_desc = usb_source.get('description', synth_name)
+                print(f"Found USB audio: {synth_desc} ({synth_name})")
 
-            # Track this source for volume management
-            self._managed_sources.append(synth_name)
-            self.set_source_volume(synth_name, 0)  # Start at 0 for fade-in
+                # Track this source for volume management
+                self._managed_sources.append(synth_name)
+                self.set_source_volume(synth_name, 0)  # Start at 0 for fade-in
 
-            # Connect USB audio capture to virtual sink for mixing
-            # Use the actual pactl source name as the pattern
-            self.connect_source_to_sink(synth_name, virtual_sink)
+                # Connect USB audio capture to virtual sink for mixing
+                # Use the actual pactl source name as the pattern
+                self.connect_source_to_sink(synth_name, virtual_sink)
 
-            # Also connect directly to output so you can hear the synth
-            if connect_to_output and default_sink:
-                self._connect_source_to_output(synth_name, default_sink)
-                self._monitoring_enabled = True
+                # Also connect directly to output so you can hear the synth
+                if connect_to_output and default_sink:
+                    self._connect_source_to_output(synth_name, default_sink)
+                    self._monitoring_enabled = True
+            else:
+                print("USB audio interface not found")
+                sources["synth"] = None
         else:
-            print("USB audio interface not found")
             sources["synth"] = None
 
         # Start scrcpy if requested

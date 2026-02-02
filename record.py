@@ -125,20 +125,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s                     # Record both sources for 30s
+  %(prog)s                     # Record synth + mic for 30s
   %(prog)s -d 60               # Record for 60 seconds
-  %(prog)s --synth-only        # Record only the synth
-  %(prog)s --mic-only          # Record only the Android mic
-  %(prog)s --mix-only          # Record mixed output only
-  %(prog)s --list              # List available sources
+  %(prog)s --synth-only        # Record only synth (no mic)
+  %(prog)s --mic-only          # Record only Android mic (no synth)
+  %(prog)s --list              # List available audio devices
         """,
     )
     parser.add_argument("--list", action="store_true", help="List available audio devices")
     parser.add_argument("--duration", "-d", type=float, default=30, help="Recording duration in seconds")
     parser.add_argument("--output", "-o", type=Path, default=Path("recordings"), help="Output directory")
-    parser.add_argument("--synth-only", action="store_true", help="Record only from synth")
-    parser.add_argument("--mic-only", action="store_true", help="Record only from mic (scrcpy)")
-    parser.add_argument("--mix-only", action="store_true", help="Record only the mixed output")
+    parser.add_argument("--synth-only", action="store_true", help="Record only synth (no Android mic)")
+    parser.add_argument("--mic-only", action="store_true", help="Record only Android mic (no synth)")
     parser.add_argument("--no-scrcpy", action="store_true", help="Don't start scrcpy (use existing)")
     parser.add_argument("--no-monitor", action="store_true", help="Don't connect to output (silent recording)")
 
@@ -163,27 +161,21 @@ Examples:
     print("Setting up audio routing...")
     sources = setup.setup_recording(
         with_scrcpy=not args.no_scrcpy and not args.synth_only,
+        with_synth=not args.mic_only,
         connect_to_output=not args.no_monitor,
     )
 
     # Determine what to record
     targets = {}
 
-    if args.mix_only:
-        targets["mix"] = sources.get("mix")
-    elif args.synth_only:
-        targets["synth"] = sources.get("synth")
-    elif args.mic_only:
-        # For mic-only, record from scrcpy directly
-        targets["mic"] = "scrcpy"
-    else:
-        # Record everything separately
-        if sources.get("synth"):
-            targets["synth"] = sources["synth"]
-        if sources.get("mic"):
-            targets["mic"] = "scrcpy"
-        if sources.get("mix"):
-            targets["mix"] = sources["mix"]
+    # All recording goes through the virtual sink to avoid Bluetooth profile issues
+    # The mix contains whatever sources were connected during setup
+    if sources.get("mix"):
+        targets["mix"] = sources["mix"]
+
+    # Also record synth separately if available and not mic-only
+    if not args.mic_only and sources.get("synth"):
+        targets["synth"] = sources["synth"]
 
     if not any(targets.values()):
         print("No sources available to record!")

@@ -36,12 +36,24 @@ nix develop
 # Record only the synth
 ./record.py --synth-only -d 60
 
-# Record only the Android mic
-./record.py --mic-only -d 60
-
 # List available audio devices
 ./record.py --list
 ```
+
+### During recording
+
+- **`m`** - Toggle monitoring on/off (with smooth fade)
+- **`q`** or **Ctrl+C** - Stop recording and save
+
+### Output files
+
+All recording goes through a PipeWire virtual sink (avoids Bluetooth profile issues).
+
+By default, recording produces:
+- `{timestamp}_synth.wav` - Isolated synth/instrument audio
+- `{timestamp}_mix.wav` - Mixed audio (synth + Android mic combined)
+
+With `--synth-only` or `--mic-only`, only the mix file is produced containing just that source.
 
 ## How it works
 
@@ -83,3 +95,4 @@ For people with ADHD, autism, or auditory hypersensitivity, abrupt sound changes
 This tool fades volume smoothly over 0.5 seconds when starting and stopping, giving your sensory system time to adjust instead of being jolted by instant silence.
 
 **If you use mpv**, you'll probably want [mpv-gradual-pause](https://github.com/gui-wf/mpv-gradual-pause) - same idea applied to video playback. Smooth fade when you pause/unpause instead of audio slamming to zero. If abrupt audio cutoffs bother you, this plugin is essential.
+
