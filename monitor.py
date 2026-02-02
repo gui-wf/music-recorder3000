@@ -46,11 +46,14 @@ Examples:
             print()
         return
 
-    # Set up signal handler for clean exit
+    # Track if we're stopping
+    stopping = False
+
     def signal_handler(sig, frame):
-        print("\nStopping...")
-        setup.cleanup()
-        sys.exit(0)
+        nonlocal stopping
+        if not stopping:
+            stopping = True
+            print("\nStopping...")
 
     signal.signal(signal.SIGINT, signal_handler)
 
@@ -102,8 +105,8 @@ Examples:
     print("\nPress Ctrl+C to stop...")
 
     try:
-        while True:
-            time.sleep(1)
+        while not stopping:
+            time.sleep(0.2)
             # Check if scrcpy died
             if with_scrcpy and not setup.is_scrcpy_running():
                 print("\nscrcpy stopped unexpectedly")
@@ -111,7 +114,10 @@ Examples:
     except KeyboardInterrupt:
         pass
     finally:
+        # Ignore Ctrl+C during cleanup to allow fade-out to complete
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         setup.cleanup()
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
         print("Cleaned up.")
 
 

@@ -170,7 +170,10 @@ Examples:
                 size = path.stat().st_size / 1024
                 print(f"  {name}: {path} ({size:.1f} KB)")
     finally:
+        # Ignore Ctrl+C during cleanup to allow fade-out to complete
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         setup.cleanup()
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 
 if __name__ == "__main__":

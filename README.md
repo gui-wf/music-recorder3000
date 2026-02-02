@@ -78,10 +78,8 @@ nix develop
 
 ## Why volume ramping?
 
-Audio that cuts off abruptly (going from full volume to silence in one sample) creates a harsh click or pop. This is jarring and can be uncomfortable, especially on headphones.
+For people with ADHD, autism, or auditory hypersensitivity, abrupt sound changes can trigger a heightened startle response - the brain's sensory gating struggles to filter sudden transitions, making jarring cutoffs genuinely uncomfortable.
 
-This tool fades volume smoothly over 0.5 seconds when starting and stopping - your ears will thank you.
+This tool fades volume smoothly over 0.5 seconds when starting and stopping, giving your sensory system time to adjust instead of being jolted by instant silence.
 
-## See also
-
-- [mpv-gradual-pause](https://github.com/gui-wf/mpv-gradual-pause) - Same concept for mpv: smooth audio fade effects when pausing/unpausing video
+**If you use mpv**, you'll probably want [mpv-gradual-pause](https://github.com/gui-wf/mpv-gradual-pause) - same idea applied to video playback. Smooth fade when you pause/unpause instead of audio slamming to zero. If abrupt audio cutoffs bother you, this plugin is essential.
