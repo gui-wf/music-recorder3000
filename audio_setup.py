@@ -236,7 +236,7 @@ class AudioSetup:
             time.sleep(step_delay)
 
     def enable_monitoring(self):
-        """Enable monitoring (connect to output) with fade-in."""
+        """Enable monitoring (connect to output)."""
         if self._monitoring_enabled:
             return
 
@@ -244,26 +244,16 @@ class AudioSetup:
             print("No default sink configured")
             return
 
-        # Set output to 0 before connecting
-        self.set_sink_volume(self._default_sink, 0)
-
         # Connect sources to output
         for source in self._managed_sources:
             self._connect_source_to_output(source, self._default_sink)
 
-        # Fade in the output only
-        self._fade_sink_only(self._default_sink, 0, 100, FADE_DURATION / 2)
-
         self._monitoring_enabled = True
 
     def disable_monitoring(self):
-        """Disable monitoring (disconnect from output) with fade-out."""
+        """Disable monitoring (disconnect from output)."""
         if not self._monitoring_enabled:
             return
-
-        # Fade out the output only (don't touch sources - recording continues)
-        if self._default_sink:
-            self._fade_sink_only(self._default_sink, 100, 0, FADE_DURATION / 2)
 
         # Remove monitor links
         for out_port, in_port in self._monitor_links:
@@ -273,10 +263,6 @@ class AudioSetup:
 
         self._monitor_links.clear()
         self._monitoring_enabled = False
-
-        # Restore output volume for other apps
-        if self._default_sink:
-            self.set_sink_volume(self._default_sink, 100)
 
     def toggle_monitoring(self) -> bool:
         """Toggle monitoring on/off. Returns new state."""
