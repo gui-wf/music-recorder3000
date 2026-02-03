@@ -94,7 +94,7 @@ def record_with_pw(
     start_time = time.time()
     try:
         with KeyboardMonitor() as kb:
-            while time.time() - start_time < duration and not stop_recording.is_set():
+            while not stop_recording.is_set() and (duration == 0 or time.time() - start_time < duration):
                 time.sleep(0.1)
 
                 # Check for key presses
@@ -137,7 +137,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s                     # Record synth + mic for 30s
+  %(prog)s                     # Record synth + mic (unlimited)
   %(prog)s -d 60               # Record for 60 seconds
   %(prog)s --synth-only        # Record only synth (no mic)
   %(prog)s --mic-only          # Record only Android mic (no synth)
@@ -145,7 +145,7 @@ Examples:
         """,
     )
     parser.add_argument("--list", action="store_true", help="List available audio devices")
-    parser.add_argument("--duration", "-d", type=float, default=30, help="Recording duration in seconds")
+    parser.add_argument("--duration", "-d", type=float, default=0, help="Recording duration in seconds (0 = unlimited)")
     parser.add_argument("--countdown", "-c", type=int, default=5, help="Countdown before recording (0 to disable)")
     parser.add_argument("--output", "-o", type=Path, default=Path("recordings"), help="Output directory")
     parser.add_argument("--synth-only", action="store_true", help="Record only synth (no Android mic)")
@@ -200,7 +200,10 @@ Examples:
         if target:
             print(f"  {name}: {target}")
 
-    print(f"\nRecording for {args.duration} seconds...")
+    if args.duration > 0:
+        print(f"\nRecording for {args.duration} seconds...")
+    else:
+        print("\nRecording (unlimited)...")
     print("Press 'm' to toggle monitoring, 'q' or Ctrl+C to stop.\n")
 
     # Countdown before recording

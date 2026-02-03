@@ -186,6 +186,34 @@ class AudioSetup:
                 print(f"Unlinked: {out_port} -> {in_port}")
         self._created_links.clear()
 
+    def disconnect_from_default_sink(self, source_pattern: str) -> int:
+        """Disconnect any existing links from a source to the default sink."""
+        default_sink = self.get_default_sink()
+        if not default_sink:
+            return 0
+
+        # Get all existing links
+        # Format is:
+        #   source:port
+        #     |-> dest:port
+        result = self._run(["pw-link", "-l"], check=False)
+        count = 0
+        current_output = None
+
+        for line in result.stdout.splitlines():
+            if not line.startswith(" ") and ":" in line:
+                # This is an output port line
+                current_output = line.strip()
+            elif "|-> " in line and current_output:
+                # This is a destination for current_output
+                dest = line.split("|-> ")[1].strip() if "|-> " in line else None
+                if dest and source_pattern.lower() in current_output.lower() and default_sink.lower() in dest.lower():
+                    if self.unlink_ports(current_output, dest):
+                        print(f"  Disconnected auto-link: {current_output} -> {dest}")
+                        count += 1
+
+        return count
+
     def set_source_volume(self, source_name: str, volume_percent: int) -> bool:
         """Set volume on a source (0-100)."""
         try:
@@ -204,7 +232,7 @@ class AudioSetup:
 
     def fade_in(self, duration: float = FADE_DURATION):
         """Fade in all managed audio sources."""
-        print("Fading in...")
+        print("  [Fading in...]", end="", flush=True)
         step_delay = duration / FADE_STEPS
 
         for step in range(FADE_STEPS + 1):
@@ -217,10 +245,11 @@ class AudioSetup:
                 self.set_sink_volume(self._virtual_sink_name, volume)
 
             time.sleep(step_delay)
+        print(" done")
 
     def fade_out(self, duration: float = FADE_DURATION):
         """Fade out all managed audio sources."""
-        print("Fading out...")
+        print("  [Fading out...]", end="", flush=True)
         step_delay = duration / FADE_STEPS
 
         for step in range(FADE_STEPS, -1, -1):
@@ -233,6 +262,7 @@ class AudioSetup:
                 self.set_sink_volume(self._virtual_sink_name, volume)
 
             time.sleep(step_delay)
+        print(" done")
 
     def _fade_sink_only(self, sink_name: str, start: int, end: int, duration: float = FADE_DURATION):
         """Fade only a specific sink's volume (not sources)."""
@@ -246,28 +276,42 @@ class AudioSetup:
             time.sleep(step_delay)
 
     def enable_monitoring(self):
-        """Enable monitoring with fade-in."""
+        """Enable monitoring by reconnecting monitor_mix to output."""
         if self._monitoring_enabled:
             return
 
-        if not self._monitor_sink_name:
+        if not self._monitor_sink_name or not self._default_sink:
             print("No monitor sink configured")
             return
 
-        # Fade in the monitor sink
+        # Reconnect monitor_mix to headphones
+        print("  [Enabling monitor...]", end="", flush=True)
+        self.set_sink_volume(self._monitor_sink_name, 0)
+        self.connect_source_to_sink(self._monitor_sink_name, self._default_sink)
         self._fade_sink_only(self._monitor_sink_name, 0, 100, FADE_DURATION)
         self._monitoring_enabled = True
+        print(" done")
 
     def disable_monitoring(self):
-        """Disable monitoring with fade-out."""
+        """Disable monitoring by disconnecting monitor_mix from output."""
         if not self._monitoring_enabled:
             return
 
-        if self._monitor_sink_name:
-            # Fade out the monitor sink
-            self._fade_sink_only(self._monitor_sink_name, 100, 0, FADE_DURATION)
+        if not self._monitor_sink_name:
+            return
+
+        print("  [Disabling monitor...]", end="", flush=True)
+        # Fade out first
+        self._fade_sink_only(self._monitor_sink_name, 100, 0, FADE_DURATION)
+
+        # Disconnect monitor_mix from headphones
+        for out_port, in_port in list(self._created_links):
+            if self._monitor_sink_name.lower() in out_port.lower() and self._default_sink and self._default_sink.lower() in in_port.lower():
+                self.unlink_ports(out_port, in_port)
+                self._created_links.remove((out_port, in_port))
 
         self._monitoring_enabled = False
+        print(" done")
 
     def toggle_monitoring(self) -> bool:
         """Toggle monitoring on/off. Returns new state."""
@@ -296,14 +340,21 @@ class AudioSetup:
                 src_ch = src_port.split(":")[-1].upper() if ":" in src_port else ""
                 dst_ch = dst_port.split(":")[-1].upper() if ":" in dst_port else ""
 
+                # Check for mono (must end with _MONO, not just contain MONO like MONITOR)
+                src_is_mono = src_ch.endswith("_MONO") or src_ch == "MONO"
+                dst_is_mono = dst_ch.endswith("_MONO") or dst_ch == "MONO"
+
+                # Check for stereo channels
+                src_is_left = src_ch.endswith("_FL") or src_ch.endswith("_L")
+                src_is_right = src_ch.endswith("_FR") or src_ch.endswith("_R")
+                dst_is_left = dst_ch.endswith("_FL") or dst_ch.endswith("_L")
+                dst_is_right = dst_ch.endswith("_FR") or dst_ch.endswith("_R")
+
                 should_connect = (
-                    "MONO" in src_ch or
-                    "MONO" in dst_ch or
-                    (src_ch == dst_ch) or
-                    ("FL" in src_ch and "FL" in dst_ch) or
-                    ("FR" in src_ch and "FR" in dst_ch) or
-                    ("FL" in dst_ch and "MONO" in src_ch) or
-                    ("FR" in dst_ch and "MONO" in src_ch)
+                    src_is_mono or
+                    dst_is_mono or
+                    (src_is_left and dst_is_left) or
+                    (src_is_right and dst_is_right)
                 )
 
                 if should_connect:
@@ -333,10 +384,25 @@ class AudioSetup:
         for out_port in source_ports["outputs"]:
             for in_port in sink_ports["inputs"]:
                 # Match channels: FL->FL, FR->FR, MONO->both
-                out_ch = out_port.split(":")[-1] if ":" in out_port else ""
-                in_ch = in_port.split(":")[-1] if ":" in in_port else ""
+                out_ch = out_port.split(":")[-1].upper() if ":" in out_port else ""
+                in_ch = in_port.split(":")[-1].upper() if ":" in in_port else ""
 
-                if out_ch == in_ch or "MONO" in out_ch.upper():
+                # Check for mono (must end with _MONO, not just contain MONO like MONITOR)
+                out_is_mono = out_ch.endswith("_MONO") or out_ch == "MONO"
+
+                # Check for stereo channels
+                out_is_left = out_ch.endswith("_FL") or out_ch.endswith("_L")
+                out_is_right = out_ch.endswith("_FR") or out_ch.endswith("_R")
+                in_is_left = in_ch.endswith("_FL") or in_ch.endswith("_L")
+                in_is_right = in_ch.endswith("_FR") or in_ch.endswith("_R")
+
+                should_connect = (
+                    out_is_mono or
+                    (out_is_left and in_is_left) or
+                    (out_is_right and in_is_right)
+                )
+
+                if should_connect:
                     if self.link_ports(out_port, in_port):
                         print(f"Linked: {out_port} -> {in_port}")
                     else:
@@ -441,7 +507,7 @@ class AudioSetup:
             time.sleep(0.5)
         return False
 
-    def connect_source_to_sink(self, source_pattern: str, sink_pattern: str) -> bool:
+    def connect_source_to_sink(self, source_pattern: str, sink_pattern: str, debug: bool = False) -> bool:
         """
         Connect an audio source (capture device) to a sink.
         This routes capture_* ports to playback_* ports.
@@ -456,6 +522,10 @@ class AudioSetup:
         sink_ports = [l.strip() for l in result.stdout.splitlines()
                       if sink_pattern.lower() in l.lower()]
 
+        if debug:
+            print(f"  DEBUG: source_pattern='{source_pattern}' -> ports: {source_ports}")
+            print(f"  DEBUG: sink_pattern='{sink_pattern}' -> ports: {sink_ports}")
+
         if not source_ports:
             print(f"No output ports found matching '{source_pattern}'")
             return False
@@ -469,18 +539,26 @@ class AudioSetup:
         for src_port in source_ports:
             for dst_port in sink_ports:
                 # Check if this is a sensible connection
+                # Port names are like "node:capture_MONO" or "node:monitor_FL"
                 src_ch = src_port.split(":")[-1].upper() if ":" in src_port else ""
                 dst_ch = dst_port.split(":")[-1].upper() if ":" in dst_port else ""
 
-                # Mono connects to everything, or match FL/FR
+                # Check for mono (must end with _MONO, not just contain MONO like MONITOR)
+                src_is_mono = src_ch.endswith("_MONO") or src_ch == "MONO"
+                dst_is_mono = dst_ch.endswith("_MONO") or dst_ch == "MONO"
+
+                # Check for stereo channels
+                src_is_left = src_ch.endswith("_FL") or src_ch.endswith("_L")
+                src_is_right = src_ch.endswith("_FR") or src_ch.endswith("_R")
+                dst_is_left = dst_ch.endswith("_FL") or dst_ch.endswith("_L")
+                dst_is_right = dst_ch.endswith("_FR") or dst_ch.endswith("_R")
+
+                # Mono connects to everything, or match L/R channels
                 should_connect = (
-                    "MONO" in src_ch or
-                    "MONO" in dst_ch or
-                    (src_ch == dst_ch) or
-                    ("FL" in src_ch and "FL" in dst_ch) or
-                    ("FR" in src_ch and "FR" in dst_ch) or
-                    ("FL" in dst_ch and "MONO" in src_ch) or
-                    ("FR" in dst_ch and "MONO" in src_ch)
+                    src_is_mono or
+                    dst_is_mono or
+                    (src_is_left and dst_is_left) or
+                    (src_is_right and dst_is_right)
                 )
 
                 if should_connect:
@@ -540,7 +618,9 @@ class AudioSetup:
             monitor_sink, self.monitor_sink_id = self.create_virtual_sink("monitor_mix")
             if monitor_sink:
                 self._monitor_sink_name = monitor_sink
-                time.sleep(0.3)
+                # Wait for monitor_mix ports to appear in PipeWire
+                if not self.wait_for_node("monitor_mix", timeout=5.0):
+                    print("Warning: monitor_mix ports did not appear in time")
                 self.set_sink_volume(monitor_sink, 0)  # Start muted for fade-in
 
         # Find and connect USB audio (synth)
@@ -571,6 +651,10 @@ class AudioSetup:
                 # Wait for scrcpy node to appear
                 if self.wait_for_node("scrcpy"):
                     sources["mic"] = "scrcpy"
+                    # Disconnect scrcpy's auto-created link to headphones
+                    # (scrcpy auto-connects to default output, bypassing our routing)
+                    time.sleep(0.3)  # Give PipeWire time to create the auto-link
+                    self.disconnect_from_default_sink("scrcpy")
                     # Connect scrcpy to virtual sink
                     self.connect_to_virtual_sink("scrcpy", virtual_sink)
                 else:
@@ -586,11 +670,17 @@ class AudioSetup:
 
         # Set up monitoring chain: record_mix monitor -> monitor_mix -> headphones
         if connect_to_output and self._monitor_sink_name and default_sink:
+            print(f"  Setting up monitoring: {virtual_sink} -> {self._monitor_sink_name} -> {default_sink}")
+
+            # Disconnect any direct links from record_mix to headphones
+            # (PipeWire may auto-create these, bypassing our monitor_mix)
+            self.disconnect_from_default_sink(virtual_sink)
+
             # Connect record_mix monitor to monitor_mix
-            self.connect_source_to_sink(f"{virtual_sink}", self._monitor_sink_name)
+            self.connect_source_to_sink(f"{virtual_sink}", self._monitor_sink_name, debug=True)
 
             # Connect monitor_mix to headphones
-            self.connect_source_to_sink(self._monitor_sink_name, default_sink)
+            self.connect_source_to_sink(self._monitor_sink_name, default_sink, debug=True)
 
             self._monitoring_enabled = True
 

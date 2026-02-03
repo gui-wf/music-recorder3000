@@ -32,11 +32,14 @@ nix develop
 # Monitor all sources (hear them through your speakers/headphones)
 ./monitor.py
 
-# Record for 30 seconds (with 5-second countdown)
-./record.py -d 30
+# Record until you press q or Ctrl+C (with 5-second countdown)
+./record.py
+
+# Record for 60 seconds
+./record.py -d 60
 
 # Record with no countdown (start immediately)
-./record.py -d 30 -c 0
+./record.py -c 0
 
 # Record only the synth
 ./record.py --synth-only -d 60
