@@ -30,12 +30,14 @@ class AudioSetup:
 
     def __init__(self):
         self.virtual_sink_id: int | None = None
+        self.monitor_sink_id: int | None = None
         self.scrcpy_process: subprocess.Popen | None = None
         self._cleanup_registered = False
         self._created_links: list[tuple[str, str]] = []  # Track links we created
         self._monitor_links: list[tuple[str, str]] = []  # Links for monitoring (to output)
         self._managed_sources: list[str] = []  # Sources we're managing volume for
         self._virtual_sink_name: str | None = None
+        self._monitor_sink_name: str | None = None
         self._default_sink: str | None = None
         self._monitoring_enabled: bool = False
 
@@ -103,10 +105,10 @@ class AudioSetup:
                     return source
         return None
 
-    def create_virtual_sink(self, name: str = "record_mix") -> str | None:
+    def create_virtual_sink(self, name: str = "record_mix") -> tuple[str | None, int | None]:
         """
         Create a virtual sink for mixing/recording.
-        Returns the sink name if successful.
+        Returns (sink_name, module_id) if successful.
         """
         try:
             # Check if it already exists
@@ -114,7 +116,7 @@ class AudioSetup:
             for sink in sinks:
                 if sink.get("name") == name:
                     print(f"Virtual sink '{name}' already exists")
-                    return name
+                    return name, None
 
             # Create the null sink
             result = self._run_pactl(
@@ -122,7 +124,7 @@ class AudioSetup:
                 f"sink_name={name}",
                 f"sink_properties=device.description={name}"
             )
-            self.virtual_sink_id = int(result) if result.isdigit() else None
+            module_id = int(result) if result.isdigit() else None
             print(f"Created virtual sink: {name}")
 
             # Register cleanup
@@ -130,13 +132,21 @@ class AudioSetup:
                 atexit.register(self.cleanup)
                 self._cleanup_registered = True
 
-            return name
+            return name, module_id
         except Exception as e:
             print(f"Failed to create virtual sink: {e}")
-            return None
+            return None, None
 
     def remove_virtual_sink(self):
-        """Remove the virtual sink."""
+        """Remove the virtual sinks."""
+        if self.monitor_sink_id is not None:
+            try:
+                self._run_pactl("unload-module", str(self.monitor_sink_id))
+                print("Removed monitor sink")
+            except Exception:
+                pass
+            self.monitor_sink_id = None
+
         if self.virtual_sink_id is not None:
             try:
                 self._run_pactl("unload-module", str(self.virtual_sink_id))
@@ -236,32 +246,27 @@ class AudioSetup:
             time.sleep(step_delay)
 
     def enable_monitoring(self):
-        """Enable monitoring (connect to output)."""
+        """Enable monitoring with fade-in."""
         if self._monitoring_enabled:
             return
 
-        if not self._default_sink:
-            print("No default sink configured")
+        if not self._monitor_sink_name:
+            print("No monitor sink configured")
             return
 
-        # Connect sources to output
-        for source in self._managed_sources:
-            self._connect_source_to_output(source, self._default_sink)
-
+        # Fade in the monitor sink
+        self._fade_sink_only(self._monitor_sink_name, 0, 100, FADE_DURATION)
         self._monitoring_enabled = True
 
     def disable_monitoring(self):
-        """Disable monitoring (disconnect from output)."""
+        """Disable monitoring with fade-out."""
         if not self._monitoring_enabled:
             return
 
-        # Remove monitor links
-        for out_port, in_port in self._monitor_links:
-            self.unlink_ports(out_port, in_port)
-            if (out_port, in_port) in self._created_links:
-                self._created_links.remove((out_port, in_port))
+        if self._monitor_sink_name:
+            # Fade out the monitor sink
+            self._fade_sink_only(self._monitor_sink_name, 100, 0, FADE_DURATION)
 
-        self._monitor_links.clear()
         self._monitoring_enabled = False
 
     def toggle_monitoring(self) -> bool:
@@ -493,18 +498,27 @@ class AudioSetup:
     ) -> dict[str, str | None]:
         """
         Set up the full recording chain:
-        1. Create virtual sink for mixing
-        2. Optionally start scrcpy
-        3. Optionally connect USB audio capture to virtual sink
-        4. Optionally connect scrcpy to virtual sink
-        5. Optionally connect to output for monitoring
+        1. Create virtual sink for mixing (record_mix)
+        2. Create monitor sink for independent volume control (monitor_mix)
+        3. Optionally start scrcpy
+        4. Connect USB audio capture and/or scrcpy to record_mix
+        5. Route record_mix -> monitor_mix -> headphones for monitoring
+
+        Architecture:
+            USB Audio ──┐
+                        ↓
+                   record_mix ──────→ pw-record (unaffected by monitor toggle)
+                        │
+            scrcpy ─────┘
+                        ↓
+                   monitor_mix ──→ headphones (faded independently)
 
         Returns dict with source names for recording.
         """
         sources = {}
 
-        # Create virtual sink
-        virtual_sink = self.create_virtual_sink("record_mix")
+        # Create virtual sink for recording
+        virtual_sink, self.virtual_sink_id = self.create_virtual_sink("record_mix")
         if not virtual_sink:
             print("Failed to create virtual sink")
             return sources
@@ -519,7 +533,15 @@ class AudioSetup:
 
         # Get default output sink for monitoring
         default_sink = self.get_default_sink()
-        self._default_sink = default_sink  # Store for toggle_monitoring
+        self._default_sink = default_sink
+
+        # Create monitor sink for independent monitoring control
+        if connect_to_output:
+            monitor_sink, self.monitor_sink_id = self.create_virtual_sink("monitor_mix")
+            if monitor_sink:
+                self._monitor_sink_name = monitor_sink
+                time.sleep(0.3)
+                self.set_sink_volume(monitor_sink, 0)  # Start muted for fade-in
 
         # Find and connect USB audio (synth)
         if with_synth:
@@ -535,13 +557,7 @@ class AudioSetup:
                 self.set_source_volume(synth_name, 0)  # Start at 0 for fade-in
 
                 # Connect USB audio capture to virtual sink for mixing
-                # Use the actual pactl source name as the pattern
                 self.connect_source_to_sink(synth_name, virtual_sink)
-
-                # Also connect directly to output so you can hear the synth
-                if connect_to_output and default_sink:
-                    self._connect_source_to_output(synth_name, default_sink)
-                    self._monitoring_enabled = True
             else:
                 print("USB audio interface not found")
                 sources["synth"] = None
@@ -557,8 +573,6 @@ class AudioSetup:
                     sources["mic"] = "scrcpy"
                     # Connect scrcpy to virtual sink
                     self.connect_to_virtual_sink("scrcpy", virtual_sink)
-
-                    # scrcpy already connects to default output automatically
                 else:
                     print("scrcpy node did not appear")
                     sources["mic"] = None
@@ -570,14 +584,32 @@ class AudioSetup:
         # The virtual sink's monitor is what we record the mix from
         sources["mix"] = f"{virtual_sink}.monitor"
 
-        # Fade in for smooth start
+        # Set up monitoring chain: record_mix monitor -> monitor_mix -> headphones
+        if connect_to_output and self._monitor_sink_name and default_sink:
+            # Connect record_mix monitor to monitor_mix
+            self.connect_source_to_sink(f"{virtual_sink}", self._monitor_sink_name)
+
+            # Connect monitor_mix to headphones
+            self.connect_source_to_sink(self._monitor_sink_name, default_sink)
+
+            self._monitoring_enabled = True
+
+        # Fade in record_mix for smooth start
         self.fade_in()
+
+        # Also fade in monitor_mix if enabled
+        if self._monitoring_enabled and self._monitor_sink_name:
+            self._fade_sink_only(self._monitor_sink_name, 0, 100, FADE_DURATION)
 
         return sources
 
     def cleanup(self):
         """Clean up all resources with smooth fade-out."""
-        # Fade out before disconnecting for smooth exit
+        # Fade out monitor sink first (if enabled)
+        if self._monitoring_enabled and self._monitor_sink_name:
+            self._fade_sink_only(self._monitor_sink_name, 100, 0, FADE_DURATION)
+
+        # Fade out record_mix and sources
         if self._managed_sources or self._virtual_sink_name:
             self.fade_out()
 
@@ -588,6 +620,8 @@ class AudioSetup:
         # Clear managed state
         self._managed_sources.clear()
         self._virtual_sink_name = None
+        self._monitor_sink_name = None
+        self._monitoring_enabled = False
 
     def get_monitor_source(self, sink_name: str = "record_mix") -> str:
         """Get the monitor source name for a sink."""

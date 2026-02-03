@@ -7,8 +7,10 @@ Built for recording a **Korg NTS-1** synth via USB audio interface and an **Andr
 ## Features
 
 - **Multi-source recording**: Capture from USB audio devices and Android phone mic simultaneously
-- **Virtual mixing**: Routes all sources through a PipeWire virtual sink for combined monitoring and recording
+- **Virtual mixing**: Routes all sources through PipeWire virtual sinks for combined monitoring and recording
+- **Independent monitor toggle**: Press `m` during recording to mute/unmute headphones without affecting the recording
 - **Smooth volume ramping**: Gradual fade-in on start and fade-out before disconnect - no harsh audio pops or clicks from abrupt cutoffs. If your brain doesn't like sounds going from 1 to 0 instantly, this is for you.
+- **Countdown timer**: Optional countdown before recording starts (default 5 seconds)
 - **Automatic cleanup**: All PipeWire links and virtual devices are properly removed on exit
 - **Nix flake**: Reproducible dev environment with all dependencies
 
@@ -30,11 +32,17 @@ nix develop
 # Monitor all sources (hear them through your speakers/headphones)
 ./monitor.py
 
-# Record for 30 seconds
+# Record for 30 seconds (with 5-second countdown)
 ./record.py -d 30
+
+# Record with no countdown (start immediately)
+./record.py -d 30 -c 0
 
 # Record only the synth
 ./record.py --synth-only -d 60
+
+# Record without hearing playback (silent recording)
+./record.py -d 30 --no-monitor
 
 # List available audio devices
 ./record.py --list
@@ -62,24 +70,27 @@ With `--synth-only` or `--mic-only`, only the mix file is produced containing ju
 │ Korg NTS-1      │──► USB Audio Interface ──┐
 └─────────────────┘                          │
                                              ▼
+                                    ┌────────────────┐      ┌──────────────┐
+                                    │  record_mix    │─────►│  Recording   │
+                                    │ (virtual sink) │      │  (.wav file) │
+                                    └────────────────┘      └──────────────┘
+┌─────────────────┐                          │
+│ Android Phone   │──► scrcpy (mic audio) ───┘
+└─────────────────┘                          │
+                                             ▼
                                     ┌────────────────┐
-                                    │  Virtual Sink  │──► Your Headphones
-                                    │  (record_mix)  │
+                                    │  monitor_mix   │─────► Your Headphones
+                                    │ (virtual sink) │
                                     └────────────────┘
-┌─────────────────┐                          ▲        │
-│ Android Phone   │──► scrcpy (mic audio) ───┘        │
-└─────────────────┘                                   ▼
-                                              ┌──────────────┐
-                                              │  Recording   │
-                                              │  (.wav file) │
-                                              └──────────────┘
 ```
 
-1. Creates a PipeWire virtual sink for mixing
+1. Creates two PipeWire virtual sinks: `record_mix` for mixing and `monitor_mix` for monitoring
 2. Starts scrcpy to stream Android mic audio over USB
-3. Connects USB audio capture and scrcpy to the virtual sink
-4. Routes the virtual sink to your default output (so you can monitor)
-5. Records from the virtual sink's monitor
+3. Connects USB audio capture and scrcpy to `record_mix`
+4. Routes `record_mix` through `monitor_mix` to your headphones
+5. Records from `record_mix` monitor (unaffected by monitoring toggle)
+
+The separate `monitor_mix` sink allows toggling monitoring with `m` during recording without affecting the recording itself - only the headphone output fades.
 
 ## Files
 
